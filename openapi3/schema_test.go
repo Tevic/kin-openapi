@@ -1,27 +1,28 @@
-package openapi3_test
+package openapi3
 
 import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 
-	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/stretchr/testify/require"
 )
 
 type schemaExample struct {
 	Title         string
-	Schema        *openapi3.Schema
+	Schema        *Schema
 	Serialization interface{}
 	AllValid      []interface{}
 	AllInvalid    []interface{}
 }
 
 func TestSchemas(t *testing.T) {
-	openapi3.DefineStringFormat("uuid", openapi3.FormatOfStringForUUIDOfRFC4122)
+	DefineStringFormat("uuid", FormatOfStringForUUIDOfRFC4122)
 	for _, example := range schemaExamples {
 		t.Run(example.Title, testSchema(t, example))
 	}
@@ -36,10 +37,10 @@ func testSchema(t *testing.T, example schemaExample) func(*testing.T) {
 			jsonSchema, err := json.Marshal(schema)
 			require.NoError(t, err)
 			require.JSONEq(t, string(jsonSerialized), string(jsonSchema))
-			var dataUnserialized openapi3.Schema
+			var dataUnserialized Schema
 			err = json.Unmarshal(jsonSerialized, &dataUnserialized)
 			require.NoError(t, err)
-			var dataSchema openapi3.Schema
+			var dataSchema Schema
 			err = json.Unmarshal(jsonSchema, &dataSchema)
 			require.NoError(t, err)
 			require.Equal(t, dataUnserialized, dataSchema)
@@ -60,19 +61,19 @@ func testSchema(t *testing.T, example schemaExample) func(*testing.T) {
 	}
 }
 
-func validateSchema(t *testing.T, schema *openapi3.Schema, value interface{}) error {
+func validateSchema(t *testing.T, schema *Schema, value interface{}, opts ...SchemaValidationOption) error {
 	data, err := json.Marshal(value)
 	require.NoError(t, err)
 	var val interface{}
 	err = json.Unmarshal(data, &val)
 	require.NoError(t, err)
-	return schema.VisitJSON(val)
+	return schema.VisitJSON(val, opts...)
 }
 
 var schemaExamples = []schemaExample{
 	{
 		Title:         "EMPTY SCHEMA",
-		Schema:        &openapi3.Schema{},
+		Schema:        &Schema{},
 		Serialization: map[string]interface{}{
 			// This OA3 schema is exactly this draft-04 schema:
 			//   {"not": {"type": "null"}}
@@ -92,7 +93,7 @@ var schemaExamples = []schemaExample{
 
 	{
 		Title:  "JUST NULLABLE",
-		Schema: openapi3.NewSchema().WithNullable(),
+		Schema: NewSchema().WithNullable(),
 		Serialization: map[string]interface{}{
 			// This OA3 schema is exactly both this draft-04 schema: {} and:
 			// {anyOf: [type:string, type:number, type:integer, type:boolean
@@ -114,7 +115,7 @@ var schemaExamples = []schemaExample{
 
 	{
 		Title:  "NULLABLE BOOLEAN",
-		Schema: openapi3.NewBoolSchema().WithNullable(),
+		Schema: NewBoolSchema().WithNullable(),
 		Serialization: map[string]interface{}{
 			"nullable": true,
 			"type":     "boolean",
@@ -136,9 +137,9 @@ var schemaExamples = []schemaExample{
 
 	{
 		Title: "NULLABLE ANYOF",
-		Schema: openapi3.NewAnyOfSchema(
-			openapi3.NewIntegerSchema(),
-			openapi3.NewFloat64Schema(),
+		Schema: NewAnyOfSchema(
+			NewIntegerSchema(),
+			NewFloat64Schema(),
 		).WithNullable(),
 		Serialization: map[string]interface{}{
 			"nullable": true,
@@ -162,7 +163,7 @@ var schemaExamples = []schemaExample{
 
 	{
 		Title:  "BOOLEAN",
-		Schema: openapi3.NewBoolSchema(),
+		Schema: NewBoolSchema(),
 		Serialization: map[string]interface{}{
 			"type": "boolean",
 		},
@@ -181,7 +182,7 @@ var schemaExamples = []schemaExample{
 
 	{
 		Title: "NUMBER",
-		Schema: openapi3.NewFloat64Schema().
+		Schema: NewFloat64Schema().
 			WithMin(2.5).
 			WithMax(3.5),
 		Serialization: map[string]interface{}{
@@ -208,7 +209,7 @@ var schemaExamples = []schemaExample{
 
 	{
 		Title: "INTEGER",
-		Schema: openapi3.NewInt64Schema().
+		Schema: NewInt64Schema().
 			WithMin(2).
 			WithMax(5),
 		Serialization: map[string]interface{}{
@@ -236,7 +237,7 @@ var schemaExamples = []schemaExample{
 
 	{
 		Title: "STRING",
-		Schema: openapi3.NewStringSchema().
+		Schema: NewStringSchema().
 			WithMinLength(2).
 			WithMaxLength(3).
 			WithPattern("^[abc]+$"),
@@ -265,7 +266,7 @@ var schemaExamples = []schemaExample{
 
 	{
 		Title:  "STRING: optional format 'uuid'",
-		Schema: openapi3.NewUUIDSchema(),
+		Schema: NewUUIDSchema(),
 		Serialization: map[string]interface{}{
 			"type":   "string",
 			"format": "uuid",
@@ -286,7 +287,7 @@ var schemaExamples = []schemaExample{
 
 	{
 		Title:  "STRING: format 'date-time'",
-		Schema: openapi3.NewDateTimeSchema(),
+		Schema: NewDateTimeSchema(),
 		Serialization: map[string]interface{}{
 			"type":   "string",
 			"format": "date-time",
@@ -311,7 +312,7 @@ var schemaExamples = []schemaExample{
 
 	{
 		Title:  "STRING: format 'date-time'",
-		Schema: openapi3.NewBytesSchema(),
+		Schema: NewBytesSchema(),
 		Serialization: map[string]interface{}{
 			"type":   "string",
 			"format": "byte",
@@ -343,12 +344,12 @@ var schemaExamples = []schemaExample{
 
 	{
 		Title: "ARRAY",
-		Schema: &openapi3.Schema{
+		Schema: &Schema{
 			Type:        "array",
 			MinItems:    2,
-			MaxItems:    openapi3.Uint64Ptr(3),
+			MaxItems:    Uint64Ptr(3),
 			UniqueItems: true,
-			Items:       openapi3.NewFloat64Schema().NewRef(),
+			Items:       NewFloat64Schema().NewRef(),
 		},
 		Serialization: map[string]interface{}{
 			"type":        "array",
@@ -383,13 +384,13 @@ var schemaExamples = []schemaExample{
 	},
 	{
 		Title: "ARRAY : items format 'object'",
-		Schema: &openapi3.Schema{
+		Schema: &Schema{
 			Type:        "array",
 			UniqueItems: true,
-			Items: (&openapi3.Schema{
+			Items: (&Schema{
 				Type: "object",
-				Properties: map[string]*openapi3.SchemaRef{
-					"key1": openapi3.NewFloat64Schema().NewRef(),
+				Properties: map[string]*SchemaRef{
+					"key1": NewFloat64Schema().NewRef(),
 				},
 			}).NewRef(),
 		},
@@ -440,16 +441,16 @@ var schemaExamples = []schemaExample{
 
 	{
 		Title: "ARRAY : items format 'object' and object with a property of array type ",
-		Schema: &openapi3.Schema{
+		Schema: &Schema{
 			Type:        "array",
 			UniqueItems: true,
-			Items: (&openapi3.Schema{
+			Items: (&Schema{
 				Type: "object",
-				Properties: map[string]*openapi3.SchemaRef{
-					"key1": (&openapi3.Schema{
+				Properties: map[string]*SchemaRef{
+					"key1": (&Schema{
 						Type:        "array",
 						UniqueItems: true,
-						Items:       openapi3.NewFloat64Schema().NewRef(),
+						Items:       NewFloat64Schema().NewRef(),
 					}).NewRef(),
 				},
 			}).NewRef(),
@@ -526,13 +527,13 @@ var schemaExamples = []schemaExample{
 
 	{
 		Title: "ARRAY : items format 'array'",
-		Schema: &openapi3.Schema{
+		Schema: &Schema{
 			Type:        "array",
 			UniqueItems: true,
-			Items: (&openapi3.Schema{
+			Items: (&Schema{
 				Type:        "array",
 				UniqueItems: true,
-				Items:       openapi3.NewFloat64Schema().NewRef(),
+				Items:       NewFloat64Schema().NewRef(),
 			}).NewRef(),
 		},
 		Serialization: map[string]interface{}{
@@ -570,16 +571,16 @@ var schemaExamples = []schemaExample{
 
 	{
 		Title: "ARRAY : items format 'array' and array with object type items",
-		Schema: &openapi3.Schema{
+		Schema: &Schema{
 			Type:        "array",
 			UniqueItems: true,
-			Items: (&openapi3.Schema{
+			Items: (&Schema{
 				Type:        "array",
 				UniqueItems: true,
-				Items: (&openapi3.Schema{
+				Items: (&Schema{
 					Type: "object",
-					Properties: map[string]*openapi3.SchemaRef{
-						"key1": openapi3.NewFloat64Schema().NewRef(),
+					Properties: map[string]*SchemaRef{
+						"key1": NewFloat64Schema().NewRef(),
 					},
 				}).NewRef(),
 			}).NewRef(),
@@ -674,11 +675,11 @@ var schemaExamples = []schemaExample{
 
 	{
 		Title: "OBJECT",
-		Schema: &openapi3.Schema{
+		Schema: &Schema{
 			Type:     "object",
-			MaxProps: openapi3.Uint64Ptr(2),
-			Properties: map[string]*openapi3.SchemaRef{
-				"numberProperty": openapi3.NewFloat64Schema().NewRef(),
+			MaxProps: Uint64Ptr(2),
+			Properties: map[string]*SchemaRef{
+				"numberProperty": NewFloat64Schema().NewRef(),
 			},
 		},
 		Serialization: map[string]interface{}{
@@ -718,10 +719,10 @@ var schemaExamples = []schemaExample{
 		},
 	},
 	{
-		Schema: &openapi3.Schema{
+		Schema: &Schema{
 			Type: "object",
-			AdditionalProperties: &openapi3.SchemaRef{
-				Value: &openapi3.Schema{
+			AdditionalProperties: &SchemaRef{
+				Value: &Schema{
 					Type: "number",
 				},
 			},
@@ -746,9 +747,9 @@ var schemaExamples = []schemaExample{
 		},
 	},
 	{
-		Schema: &openapi3.Schema{
+		Schema: &Schema{
 			Type:                        "object",
-			AdditionalPropertiesAllowed: openapi3.BoolPtr(true),
+			AdditionalPropertiesAllowed: BoolPtr(true),
 		},
 		Serialization: map[string]interface{}{
 			"type":                 "object",
@@ -765,9 +766,9 @@ var schemaExamples = []schemaExample{
 
 	{
 		Title: "NOT",
-		Schema: &openapi3.Schema{
-			Not: &openapi3.SchemaRef{
-				Value: &openapi3.Schema{
+		Schema: &Schema{
+			Not: &SchemaRef{
+				Value: &Schema{
 					Enum: []interface{}{
 						nil,
 						true,
@@ -802,15 +803,15 @@ var schemaExamples = []schemaExample{
 
 	{
 		Title: "ANY OF",
-		Schema: &openapi3.Schema{
-			AnyOf: []*openapi3.SchemaRef{
+		Schema: &Schema{
+			AnyOf: []*SchemaRef{
 				{
-					Value: openapi3.NewFloat64Schema().
+					Value: NewFloat64Schema().
 						WithMin(1).
 						WithMax(2),
 				},
 				{
-					Value: openapi3.NewFloat64Schema().
+					Value: NewFloat64Schema().
 						WithMin(2).
 						WithMax(3),
 				},
@@ -843,15 +844,15 @@ var schemaExamples = []schemaExample{
 
 	{
 		Title: "ALL OF",
-		Schema: &openapi3.Schema{
-			AllOf: []*openapi3.SchemaRef{
+		Schema: &Schema{
+			AllOf: []*SchemaRef{
 				{
-					Value: openapi3.NewFloat64Schema().
+					Value: NewFloat64Schema().
 						WithMin(1).
 						WithMax(2),
 				},
 				{
-					Value: openapi3.NewFloat64Schema().
+					Value: NewFloat64Schema().
 						WithMin(2).
 						WithMax(3),
 				},
@@ -884,15 +885,15 @@ var schemaExamples = []schemaExample{
 
 	{
 		Title: "ONE OF",
-		Schema: &openapi3.Schema{
-			OneOf: []*openapi3.SchemaRef{
+		Schema: &Schema{
+			OneOf: []*SchemaRef{
 				{
-					Value: openapi3.NewFloat64Schema().
+					Value: NewFloat64Schema().
 						WithMin(1).
 						WithMax(2),
 				},
 				{
-					Value: openapi3.NewFloat64Schema().
+					Value: NewFloat64Schema().
 						WithMin(2).
 						WithMax(3),
 				},
@@ -926,7 +927,7 @@ var schemaExamples = []schemaExample{
 
 type schemaTypeExample struct {
 	Title      string
-	Schema     *openapi3.Schema
+	Schema     *Schema
 	AllValid   []string
 	AllInvalid []string
 }
@@ -942,12 +943,12 @@ func testType(t *testing.T, example schemaTypeExample) func(*testing.T) {
 		baseSchema := example.Schema
 		for _, typ := range example.AllValid {
 			schema := baseSchema.WithFormat(typ)
-			err := schema.Validate(context.TODO())
+			err := schema.Validate(context.Background())
 			require.NoError(t, err)
 		}
 		for _, typ := range example.AllInvalid {
 			schema := baseSchema.WithFormat(typ)
-			err := schema.Validate(context.TODO())
+			err := schema.Validate(context.Background())
 			require.Error(t, err)
 		}
 	}
@@ -956,7 +957,7 @@ func testType(t *testing.T, example schemaTypeExample) func(*testing.T) {
 var typeExamples = []schemaTypeExample{
 	{
 		Title:  "STRING",
-		Schema: openapi3.NewStringSchema(),
+		Schema: NewStringSchema(),
 		AllValid: []string{
 			"",
 			"byte",
@@ -974,7 +975,7 @@ var typeExamples = []schemaTypeExample{
 
 	{
 		Title:  "NUMBER",
-		Schema: openapi3.NewFloat64Schema(),
+		Schema: NewFloat64Schema(),
 		AllValid: []string{
 			"",
 			"float",
@@ -987,7 +988,7 @@ var typeExamples = []schemaTypeExample{
 
 	{
 		Title:  "INTEGER",
-		Schema: openapi3.NewIntegerSchema(),
+		Schema: NewIntegerSchema(),
 		AllValid: []string{
 			"",
 			"int32",
@@ -1014,29 +1015,29 @@ func testSchemaError(t *testing.T, example schemaErrorExample) func(*testing.T) 
 
 type schemaErrorExample struct {
 	Title string
-	Error *openapi3.SchemaError
+	Error *SchemaError
 	Want  string
 }
 
 var schemaErrorExamples = []schemaErrorExample{
 	{
 		Title: "SIMPLE",
-		Error: &openapi3.SchemaError{
+		Error: &SchemaError{
 			Value:  1,
-			Schema: &openapi3.Schema{},
+			Schema: &Schema{},
 			Reason: "SIMPLE",
 		},
 		Want: "SIMPLE",
 	},
 	{
 		Title: "NEST",
-		Error: &openapi3.SchemaError{
+		Error: &SchemaError{
 			Value:  1,
-			Schema: &openapi3.Schema{},
+			Schema: &Schema{},
 			Reason: "PARENT",
-			Origin: &openapi3.SchemaError{
+			Origin: &SchemaError{
 				Value:  1,
-				Schema: &openapi3.Schema{},
+				Schema: &Schema{},
 				Reason: "NEST",
 			},
 		},
@@ -1044,30 +1045,177 @@ var schemaErrorExamples = []schemaErrorExample{
 	},
 }
 
-func TestRegisterArrayUniqueItemsChecker(t *testing.T) {
-	var (
-		checker = func(items []interface{}) bool {
-			return false
-		}
-		scheme = openapi3.Schema{
-			Type:        "array",
-			UniqueItems: true,
-			Items:       openapi3.NewStringSchema().NewRef(),
-		}
-		val = []interface{}{"1", "2", "3"}
-		err error
-	)
+type schemaMultiErrorExample struct {
+	Title          string
+	Schema         *Schema
+	Values         []interface{}
+	ExpectedErrors []MultiError
+}
 
-	// Fist checked by predefined function
-	err = scheme.VisitJSON(val)
+func TestSchemasMultiError(t *testing.T) {
+	for _, example := range schemaMultiErrorExamples {
+		t.Run(example.Title, testSchemaMultiError(t, example))
+	}
+}
+
+func testSchemaMultiError(t *testing.T, example schemaMultiErrorExample) func(*testing.T) {
+	return func(t *testing.T) {
+		schema := example.Schema
+		for i, value := range example.Values {
+			err := validateSchema(t, schema, value, MultiErrors())
+			require.Error(t, err)
+			require.IsType(t, MultiError{}, err)
+
+			merr, _ := err.(MultiError)
+			expected := example.ExpectedErrors[i]
+			require.True(t, len(merr) > 0)
+			require.Len(t, merr, len(expected))
+			for _, e := range merr {
+				require.IsType(t, &SchemaError{}, e)
+				var found bool
+				scherr, _ := e.(*SchemaError)
+				for _, expectedErr := range expected {
+					expectedScherr, _ := expectedErr.(*SchemaError)
+					if reflect.DeepEqual(expectedScherr.reversePath, scherr.reversePath) &&
+						expectedScherr.SchemaField == scherr.SchemaField {
+						found = true
+						break
+					}
+				}
+				require.True(t, found, fmt.Sprintf("missing %s error on %s", scherr.SchemaField, strings.Join(scherr.JSONPointer(), ".")))
+			}
+		}
+	}
+}
+
+var schemaMultiErrorExamples = []schemaMultiErrorExample{
+	{
+		Title: "STRING",
+		Schema: NewStringSchema().
+			WithMinLength(2).
+			WithMaxLength(3).
+			WithPattern("^[abc]+$"),
+		Values: []interface{}{
+			"f",
+			"foobar",
+		},
+		ExpectedErrors: []MultiError{
+			{&SchemaError{SchemaField: "minLength"}, &SchemaError{SchemaField: "pattern"}},
+			{&SchemaError{SchemaField: "maxLength"}, &SchemaError{SchemaField: "pattern"}},
+		},
+	},
+	{
+		Title: "NUMBER",
+		Schema: NewIntegerSchema().
+			WithMin(1).
+			WithMax(10),
+		Values: []interface{}{
+			0.5,
+			10.1,
+		},
+		ExpectedErrors: []MultiError{
+			{&SchemaError{SchemaField: "type"}, &SchemaError{SchemaField: "minimum"}},
+			{&SchemaError{SchemaField: "type"}, &SchemaError{SchemaField: "maximum"}},
+		},
+	},
+	{
+		Title: "ARRAY: simple",
+		Schema: NewArraySchema().
+			WithMinItems(2).
+			WithMaxItems(2).
+			WithItems(NewStringSchema().
+				WithPattern("^[abc]+$")),
+		Values: []interface{}{
+			[]interface{}{"foo"},
+			[]interface{}{"foo", "bar", "fizz"},
+		},
+		ExpectedErrors: []MultiError{
+			{
+				&SchemaError{SchemaField: "minItems"},
+				&SchemaError{SchemaField: "pattern", reversePath: []string{"0"}},
+			},
+			{
+				&SchemaError{SchemaField: "maxItems"},
+				&SchemaError{SchemaField: "pattern", reversePath: []string{"0"}},
+				&SchemaError{SchemaField: "pattern", reversePath: []string{"1"}},
+				&SchemaError{SchemaField: "pattern", reversePath: []string{"2"}},
+			},
+		},
+	},
+	{
+		Title: "ARRAY: object",
+		Schema: NewArraySchema().
+			WithItems(NewObjectSchema().
+				WithProperties(map[string]*Schema{
+					"key1": NewStringSchema(),
+					"key2": NewIntegerSchema(),
+				}),
+			),
+		Values: []interface{}{
+			[]interface{}{
+				map[string]interface{}{
+					"key1": 100, // not a string
+					"key2": "not an integer",
+				},
+			},
+		},
+		ExpectedErrors: []MultiError{
+			{
+				&SchemaError{SchemaField: "type", reversePath: []string{"key1", "0"}},
+				&SchemaError{SchemaField: "type", reversePath: []string{"key2", "0"}},
+			},
+		},
+	},
+	{
+		Title: "OBJECT",
+		Schema: NewObjectSchema().
+			WithProperties(map[string]*Schema{
+				"key1": NewStringSchema(),
+				"key2": NewIntegerSchema(),
+				"key3": NewArraySchema().
+					WithItems(NewStringSchema().
+						WithPattern("^[abc]+$")),
+			}),
+		Values: []interface{}{
+			map[string]interface{}{
+				"key1": 100, // not a string
+				"key2": "not an integer",
+				"key3": []interface{}{"abc", "def"},
+			},
+		},
+		ExpectedErrors: []MultiError{
+			{
+				&SchemaError{SchemaField: "type", reversePath: []string{"key1"}},
+				&SchemaError{SchemaField: "type", reversePath: []string{"key2"}},
+				&SchemaError{SchemaField: "pattern", reversePath: []string{"1", "key3"}},
+			},
+		},
+	},
+}
+
+func TestIssue283(t *testing.T) {
+	const api = `
+openapi: "3.0.1"
+components:
+  schemas:
+    Test:
+      properties:
+        name:
+          type: string
+        ownerName:
+          not:
+            type: boolean
+      type: object
+`
+	data := map[string]interface{}{
+		"name":      "kin-openapi",
+		"ownerName": true,
+	}
+	s, err := NewSwaggerLoader().LoadSwaggerFromData([]byte(api))
 	require.NoError(t, err)
-
-	// Register a function will always return false when check if a
-	// slice has unique items, then use a slice indeed has unique
-	// items to verify that check unique items will failed.
-	openapi3.RegisterArrayUniqueItemsChecker(checker)
-
-	err = scheme.VisitJSON(val)
-	require.Error(t, err)
-	require.True(t, strings.HasPrefix(err.Error(), "Duplicate items found"))
+	require.NotNil(t, s)
+	err = s.Components.Schemas["Test"].Value.VisitJSON(data)
+	require.NotNil(t, err)
+	require.NotEqual(t, errSchema, err)
+	require.Contains(t, err.Error(), `Error at "/ownerName": Doesn't match schema "not"`)
 }

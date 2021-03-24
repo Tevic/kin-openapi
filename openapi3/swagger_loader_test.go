@@ -1,14 +1,15 @@
-package openapi3_test
+package openapi3
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
-	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,7 +55,7 @@ paths:
                 $ref: '#/components/schemas/ErrorModel'
 `)
 
-	loader := openapi3.NewSwaggerLoader()
+	loader := NewSwaggerLoader()
 	doc, err := loader.LoadSwaggerFromData(spec)
 	require.NoError(t, err)
 	require.Equal(t, "An API", doc.Info.Title)
@@ -68,24 +69,23 @@ paths:
 }
 
 func ExampleSwaggerLoader() {
-	source := `{"info":{"description":"An API"}}`
-	swagger, err := openapi3.NewSwaggerLoader().LoadSwaggerFromData([]byte(source))
+	const source = `{"info":{"description":"An API"}}`
+	swagger, err := NewSwaggerLoader().LoadSwaggerFromData([]byte(source))
 	if err != nil {
 		panic(err)
 	}
 	fmt.Print(swagger.Info.Description)
-	// Output:
-	// An API
+	// Output: An API
 }
 
 func TestResolveSchemaRef(t *testing.T) {
 	source := []byte(`{"openapi":"3.0.0","info":{"title":"MyAPI","version":"0.1",description":"An API"},"paths":{},"components":{"schemas":{"B":{"type":"string"},"A":{"allOf":[{"$ref":"#/components/schemas/B"}]}}}}`)
-	loader := openapi3.NewSwaggerLoader()
+	loader := NewSwaggerLoader()
 	doc, err := loader.LoadSwaggerFromData(source)
 	require.NoError(t, err)
 	err = doc.Validate(loader.Context)
-
 	require.NoError(t, err)
+
 	refAVisited := doc.Components.Schemas["A"].Value.AllOf[0]
 	require.Equal(t, "#/components/schemas/B", refAVisited.Ref)
 	require.NotNil(t, refAVisited.Value)
@@ -93,11 +93,11 @@ func TestResolveSchemaRef(t *testing.T) {
 
 func TestResolveSchemaRefWithNullSchemaRef(t *testing.T) {
 	source := []byte(`{"openapi":"3.0.0","info":{"title":"MyAPI","version":"0.1","description":"An API"},"paths":{"/foo":{"post":{"requestBody":{"content":{"application/json":{"schema":null}}}}}}}`)
-	loader := openapi3.NewSwaggerLoader()
+	loader := NewSwaggerLoader()
 	doc, err := loader.LoadSwaggerFromData(source)
 	require.NoError(t, err)
 	err = doc.Validate(loader.Context)
-	require.EqualError(t, err, "invalid paths: Found unresolved ref: ''")
+	require.EqualError(t, err, `invalid paths: found unresolved ref: ""`)
 }
 
 func TestResolveResponseExampleRef(t *testing.T) {
@@ -122,7 +122,7 @@ paths:
               examples:
                 test:
                   $ref: '#/components/examples/test'`)
-	loader := openapi3.NewSwaggerLoader()
+	loader := NewSwaggerLoader()
 	doc, err := loader.LoadSwaggerFromData(source)
 	require.NoError(t, err)
 
@@ -134,76 +134,12 @@ paths:
 	require.Equal(t, example.Value.Value.(map[string]interface{})["error"].(bool), false)
 }
 
-type sourceExample struct {
-	Location *url.URL
-	Spec     []byte
-}
-
-type multipleSourceSwaggerLoaderExample struct {
-	Sources []*sourceExample
-}
-
-func (l *multipleSourceSwaggerLoaderExample) LoadSwaggerFromURI(
-	loader *openapi3.SwaggerLoader,
-	location *url.URL,
-) (*openapi3.Swagger, error) {
-	source := l.resolveSourceFromURI(location)
-	if source == nil {
-		return nil, fmt.Errorf("Unsupported URI: '%s'", location.String())
-	}
-	return loader.LoadSwaggerFromData(source.Spec)
-}
-
-func (l *multipleSourceSwaggerLoaderExample) resolveSourceFromURI(location fmt.Stringer) *sourceExample {
-	locationString := location.String()
-	for _, v := range l.Sources {
-		if v.Location.String() == locationString {
-			return v
-		}
-	}
-	return nil
-}
-
-func TestResolveSchemaExternalRef(t *testing.T) {
-	rootLocation := &url.URL{Scheme: "http", Host: "example.com", Path: "spec.json"}
-	externalLocation := &url.URL{Scheme: "http", Host: "example.com", Path: "external.json"}
-	rootSpec := []byte(fmt.Sprintf(
-		`{"openapi":"3.0.0","info":{"title":"MyAPI","version":"0.1","description":"An API"},"paths":{},"components":{"schemas":{"Root":{"allOf":[{"$ref":"%s#/components/schemas/External"}]}}}}`,
-		externalLocation.String(),
-	))
-	externalSpec := []byte(`{"openapi":"3.0.0","info":{"title":"MyAPI","version":"0.1","description":"External Spec"},"paths":{},"components":{"schemas":{"External":{"type":"string"}}}}`)
-	multipleSourceLoader := &multipleSourceSwaggerLoaderExample{
-		Sources: []*sourceExample{
-			{
-				Location: rootLocation,
-				Spec:     rootSpec,
-			},
-			{
-				Location: externalLocation,
-				Spec:     externalSpec,
-			},
-		},
-	}
-	loader := &openapi3.SwaggerLoader{
-		IsExternalRefsAllowed:  true,
-		LoadSwaggerFromURIFunc: multipleSourceLoader.LoadSwaggerFromURI,
-	}
-	doc, err := loader.LoadSwaggerFromURI(rootLocation)
-	require.NoError(t, err)
-	err = doc.Validate(loader.Context)
-
-	require.NoError(t, err)
-	refRootVisited := doc.Components.Schemas["Root"].Value.AllOf[0]
-	require.Equal(t, fmt.Sprintf("%s#/components/schemas/External", externalLocation.String()), refRootVisited.Ref)
-	require.NotNil(t, refRootVisited.Value)
-}
-
 func TestLoadErrorOnRefMisuse(t *testing.T) {
 	spec := []byte(`
 openapi: '3.0.0'
 servers: [{url: /}]
 info:
-  title: ''
+  title: Some API
   version: '1'
 components:
   schemas:
@@ -213,6 +149,7 @@ paths:
     put:
       description: ''
       requestBody:
+        # Uses a schema ref instead of a requestBody ref.
         $ref: '#/components/schemas/Thing'
       responses:
         '201':
@@ -223,7 +160,7 @@ paths:
                 $ref: '#/components/schemas/Thing'
 `)
 
-	loader := openapi3.NewSwaggerLoader()
+	loader := NewSwaggerLoader()
 	_, err := loader.LoadSwaggerFromData(spec)
 	require.Error(t, err)
 }
@@ -251,7 +188,7 @@ paths:
           description: Test call.
 `)
 
-	loader := openapi3.NewSwaggerLoader()
+	loader := NewSwaggerLoader()
 	swagger, err := loader.LoadSwaggerFromData(spec)
 	require.NoError(t, err)
 
@@ -283,7 +220,7 @@ paths:
           description: Test call.
 `)
 
-	loader := openapi3.NewSwaggerLoader()
+	loader := NewSwaggerLoader()
 	swagger, err := loader.LoadSwaggerFromData(spec)
 	require.NoError(t, err)
 
@@ -305,7 +242,7 @@ func TestLoadFromRemoteURL(t *testing.T) {
 	ts.Start()
 	defer ts.Close()
 
-	loader := openapi3.NewSwaggerLoader()
+	loader := NewSwaggerLoader()
 	loader.IsExternalRefsAllowed = true
 	url, err := url.Parse("http://" + addr + "/test.openapi.json")
 	require.NoError(t, err)
@@ -316,17 +253,27 @@ func TestLoadFromRemoteURL(t *testing.T) {
 	require.Equal(t, "string", swagger.Components.Schemas["TestSchema"].Value.Type)
 }
 
+func TestLoadWithReferenceInReference(t *testing.T) {
+	loader := NewSwaggerLoader()
+	loader.IsExternalRefsAllowed = true
+	doc, err := loader.LoadSwaggerFromFile("testdata/refInRef/openapi.json")
+	require.NoError(t, err)
+	require.NotNil(t, doc)
+	err = doc.Validate(loader.Context)
+	require.NoError(t, err)
+	require.Equal(t, "string", doc.Paths["/api/test/ref/in/ref"].Post.RequestBody.Value.Content["application/json"].Schema.Value.Properties["definition_reference"].Value.Type)
+}
+
 func TestLoadFileWithExternalSchemaRef(t *testing.T) {
-	loader := openapi3.NewSwaggerLoader()
+	loader := NewSwaggerLoader()
 	loader.IsExternalRefsAllowed = true
 	swagger, err := loader.LoadSwaggerFromFile("testdata/testref.openapi.json")
 	require.NoError(t, err)
-
 	require.NotNil(t, swagger.Components.Schemas["AnotherTestSchema"].Value.Type)
 }
 
 func TestLoadFileWithExternalSchemaRefSingleComponent(t *testing.T) {
-	loader := openapi3.NewSwaggerLoader()
+	loader := NewSwaggerLoader()
 	loader.IsExternalRefsAllowed = true
 	swagger, err := loader.LoadSwaggerFromFile("testdata/testrefsinglecomponent.openapi.json")
 	require.NoError(t, err)
@@ -369,7 +316,7 @@ func TestLoadRequestResponseHeaderRef(t *testing.T) {
     }
 }`)
 
-	loader := openapi3.NewSwaggerLoader()
+	loader := NewSwaggerLoader()
 	swagger, err := loader.LoadSwaggerFromData(spec)
 	require.NoError(t, err)
 
@@ -408,7 +355,7 @@ func TestLoadFromDataWithExternalRequestResponseHeaderRemoteRef(t *testing.T) {
 	ts.Start()
 	defer ts.Close()
 
-	loader := openapi3.NewSwaggerLoader()
+	loader := NewSwaggerLoader()
 	loader.IsExternalRefsAllowed = true
 	swagger, err := loader.LoadSwaggerFromDataWithPath(spec, &url.URL{Path: "testdata/testfilename.openapi.json"})
 	require.NoError(t, err)
@@ -418,7 +365,7 @@ func TestLoadFromDataWithExternalRequestResponseHeaderRemoteRef(t *testing.T) {
 }
 
 func TestLoadYamlFile(t *testing.T) {
-	loader := openapi3.NewSwaggerLoader()
+	loader := NewSwaggerLoader()
 	loader.IsExternalRefsAllowed = true
 	swagger, err := loader.LoadSwaggerFromFile("testdata/test.openapi.yml")
 	require.NoError(t, err)
@@ -427,7 +374,7 @@ func TestLoadYamlFile(t *testing.T) {
 }
 
 func TestLoadYamlFileWithExternalSchemaRef(t *testing.T) {
-	loader := openapi3.NewSwaggerLoader()
+	loader := NewSwaggerLoader()
 	loader.IsExternalRefsAllowed = true
 	swagger, err := loader.LoadSwaggerFromFile("testdata/testref.openapi.yml")
 	require.NoError(t, err)
@@ -436,7 +383,7 @@ func TestLoadYamlFileWithExternalSchemaRef(t *testing.T) {
 }
 
 func TestLoadYamlFileWithExternalPathRef(t *testing.T) {
-	loader := openapi3.NewSwaggerLoader()
+	loader := NewSwaggerLoader()
 	loader.IsExternalRefsAllowed = true
 	swagger, err := loader.LoadSwaggerFromFile("testdata/pathref.openapi.yml")
 	require.NoError(t, err)
@@ -476,7 +423,7 @@ paths:
             father:
               $ref: '#/components/links/Father'
 `)
-	loader := openapi3.NewSwaggerLoader()
+	loader := NewSwaggerLoader()
 	doc, err := loader.LoadSwaggerFromData(source)
 	require.NoError(t, err)
 
@@ -545,9 +492,39 @@ paths:
                 $ref: '#/components/schemas/ErrorModel'
 `)
 
-	loader := openapi3.NewSwaggerLoader()
+	loader := NewSwaggerLoader()
 	doc, err := loader.LoadSwaggerFromData(spec)
 	require.NoError(t, err)
 	err = doc.Validate(loader.Context)
 	require.NoError(t, err)
+}
+
+func TestServersVariables(t *testing.T) {
+	const spec = `
+openapi: 3.0.1
+info:
+  title: My API
+  version: 1.0.0
+paths: {}
+servers:
+- @@@
+`
+	for value, expected := range map[string]error{
+		`{url: /}`:                            nil,
+		`{url: "http://{x}.{y}.example.com"}`: errors.New("invalid servers: server has undeclared variables"),
+		`{url: "http://{x}.y}.example.com"}`:  errors.New("invalid servers: server URL has mismatched { and }"),
+		`{url: "http://{x.example.com"}`:      errors.New("invalid servers: server URL has mismatched { and }"),
+		`{url: "http://{x}.example.com", variables: {x: {default: "www"}}}`: nil,
+		`{url: "http://{x}.example.com", variables: {x: {enum: ["www"]}}}`:  nil,
+		`{url: "http://www.example.com", variables: {x: {enum: ["www"]}}}`:  errors.New("invalid servers: server has undeclared variables"),
+		`{url: "http://{y}.example.com", variables: {x: {enum: ["www"]}}}`:  errors.New("invalid servers: server has undeclared variables"),
+	} {
+		t.Run(value, func(t *testing.T) {
+			loader := NewSwaggerLoader()
+			doc, err := loader.LoadSwaggerFromData([]byte(strings.Replace(spec, "@@@", value, 1)))
+			require.NoError(t, err)
+			err = doc.Validate(loader.Context)
+			require.Equal(t, expected, err)
+		})
+	}
 }

@@ -10,6 +10,7 @@ package openapi2
 import (
 	"fmt"
 	"net/http"
+	"sort"
 
 	"github.com/getkin/kin-openapi/jsoninfo"
 	"github.com/getkin/kin-openapi/openapi3"
@@ -21,6 +22,7 @@ type Swagger struct {
 	Info                openapi3.Info                  `json:"info"`
 	ExternalDocs        *openapi3.ExternalDocs         `json:"externalDocs,omitempty"`
 	Schemes             []string                       `json:"schemes,omitempty"`
+	Consumes            []string                       `json:"consumes,omitempty"`
 	Host                string                         `json:"host,omitempty"`
 	BasePath            string                         `json:"basePath,omitempty"`
 	Paths               map[string]*PathItem           `json:"paths,omitempty"`
@@ -118,7 +120,7 @@ func (pathItem *PathItem) GetOperation(method string) *Operation {
 	case http.MethodPut:
 		return pathItem.Put
 	default:
-		panic(fmt.Errorf("Unsupported HTTP method '%s'", method))
+		panic(fmt.Errorf("unsupported HTTP method %q", method))
 	}
 }
 
@@ -139,7 +141,7 @@ func (pathItem *PathItem) SetOperation(method string, operation *Operation) {
 	case http.MethodPut:
 		pathItem.Put = operation
 	default:
-		panic(fmt.Errorf("Unsupported HTTP method '%s'", method))
+		panic(fmt.Errorf("unsupported HTTP method %q", method))
 	}
 }
 
@@ -166,6 +168,20 @@ func (operation *Operation) UnmarshalJSON(data []byte) error {
 }
 
 type Parameters []*Parameter
+
+var _ sort.Interface = Parameters{}
+
+func (ps Parameters) Len() int      { return len(ps) }
+func (ps Parameters) Swap(i, j int) { ps[i], ps[j] = ps[j], ps[i] }
+func (ps Parameters) Less(i, j int) bool {
+	if ps[i].Name != ps[j].Name {
+		return ps[i].Name < ps[j].Name
+	}
+	if ps[i].In != ps[j].In {
+		return ps[i].In < ps[j].In
+	}
+	return ps[i].Ref < ps[j].Ref
+}
 
 type Parameter struct {
 	openapi3.ExtensionProps
@@ -221,9 +237,18 @@ func (response *Response) UnmarshalJSON(data []byte) error {
 }
 
 type Header struct {
+	openapi3.ExtensionProps
 	Ref         string `json:"$ref,omitempty"`
 	Description string `json:"description,omitempty"`
 	Type        string `json:"type,omitempty"`
+}
+
+func (header *Header) MarshalJSON() ([]byte, error) {
+	return jsoninfo.MarshalStrictStruct(header)
+}
+
+func (header *Header) UnmarshalJSON(data []byte) error {
+	return jsoninfo.UnmarshalStrictStruct(data, header)
 }
 
 type SecurityRequirements []map[string][]string

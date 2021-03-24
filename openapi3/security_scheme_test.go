@@ -1,10 +1,9 @@
-package openapi3_test
+package openapi3
 
 import (
 	"context"
 	"testing"
 
-	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,10 +22,10 @@ func TestSecuritySchemaExample(t *testing.T) {
 func testSecuritySchemaExample(t *testing.T, e securitySchemeExample) func(*testing.T) {
 	return func(t *testing.T) {
 		var err error
-		ss := &openapi3.SecurityScheme{}
+		ss := &SecurityScheme{}
 		err = ss.UnmarshalJSON(e.raw)
 		require.NoError(t, err)
-		err = ss.Validate(context.TODO())
+		err = ss.Validate(context.Background())
 		if e.valid {
 			require.NoError(t, err)
 		} else {
@@ -46,6 +45,26 @@ var securitySchemeExamples = []securitySchemeExample{
 }
 `),
 		valid: true,
+	},
+	{
+		title: "Negotiate Authentication Sample",
+		raw: []byte(`
+{
+  "type": "http",
+  "scheme": "negotiate"
+}
+`),
+		valid: true,
+	},
+	{
+		title: "Unknown http Authentication Sample",
+		raw: []byte(`
+{
+  "type": "http",
+  "scheme": "notvalid"
+}
+`),
+		valid: false,
 	},
 	{
 		title: "API Key Sample",
@@ -198,5 +217,25 @@ var securitySchemeExamples = []securitySchemeExample{
 }
 `),
 		valid: true,
+	},
+	{
+		title: "OIDC Type With URL",
+		raw: []byte(`
+{
+  "type": "openIdConnect",
+  "openIdConnectUrl": "https://example.com/.well-known/openid-configuration"
+}
+`),
+		valid: true,
+	},
+	{
+		title: "OIDC Type Without URL",
+		raw: []byte(`
+{
+  "type": "openIdConnect",
+  "openIdConnectUrl": ""
+}
+`),
+		valid: false,
 	},
 }

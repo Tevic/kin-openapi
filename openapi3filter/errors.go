@@ -1,43 +1,20 @@
 package openapi3filter
 
 import (
-	"errors"
 	"fmt"
-	"net/http"
 
 	"github.com/getkin/kin-openapi/openapi3"
 )
 
-var (
-	errRouteMissingSwagger          = errors.New("Route is missing OpenAPI specification")
-	errRouteMissingOperation        = errors.New("Route is missing OpenAPI operation")
-	ErrAuthenticationServiceMissing = errors.New("Request validator doesn't have an authentication service defined")
-)
+var _ error = &RequestError{}
 
-type RouteError struct {
-	Route  Route
-	Reason string
-}
-
-func (err *RouteError) Error() string {
-	return err.Reason
-}
-
+// RequestError is returned by ValidateRequest when request does not match OpenAPI spec
 type RequestError struct {
 	Input       *RequestValidationInput
 	Parameter   *openapi3.Parameter
 	RequestBody *openapi3.RequestBody
-	Status      int
 	Reason      string
 	Err         error
-}
-
-func (err *RequestError) HTTPStatus() int {
-	status := err.Status
-	if status == 0 {
-		status = http.StatusBadRequest
-	}
-	return status
 }
 
 func (err *RequestError) Error() string {
@@ -50,14 +27,17 @@ func (err *RequestError) Error() string {
 		}
 	}
 	if v := err.Parameter; v != nil {
-		return fmt.Sprintf("Parameter '%s' in %s has an error: %s", v.Name, v.In, reason)
+		return fmt.Sprintf("parameter %q in %s has an error: %s", v.Name, v.In, reason)
 	} else if v := err.RequestBody; v != nil {
-		return fmt.Sprintf("Request body has an error: %s", reason)
+		return fmt.Sprintf("request body has an error: %s", reason)
 	} else {
 		return reason
 	}
 }
 
+var _ error = &ResponseError{}
+
+// ResponseError is returned by ValidateResponse when response does not match OpenAPI spec
 type ResponseError struct {
 	Input  *ResponseValidationInput
 	Reason string
@@ -76,6 +56,10 @@ func (err *ResponseError) Error() string {
 	return reason
 }
 
+var _ error = &SecurityRequirementsError{}
+
+// SecurityRequirementsError is returned by ValidateSecurityRequirements
+// when no requirement is met.
 type SecurityRequirementsError struct {
 	SecurityRequirements openapi3.SecurityRequirements
 	Errors               []error
